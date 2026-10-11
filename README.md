@@ -63,7 +63,17 @@ The accompanying PowerPoint includes speaker notes on every slide. Its title sli
 
 There are 42 people with early-stage Parkinson's disease and no healthy control group. Repeated recordings do not create thousands of independent patients. Motor UPDRS targets are **linearly interpolated**, rather than freshly assessed for every recording. The nine-patient bootstrap interval is approximate and conditional on this fitted model. No clinical threshold for acceptable error was established.
 
-For a follow-up, add age and sex and compare grouped development validation on the same folds. Keep the original test results as the original experiment; do not repeatedly select changes using those nine patients. A new confirmatory experiment needs a test group reserved before new choices, preferably external data.
+## Development-only extension
+
+Run this after the original experiment:
+
+```bash
+python SLT.py --development-only
+```
+
+This compares voice alone with voice plus age and sex on the same 33 development patients and the same five grouped folds. It writes the six model/feature-set scores to `results_extension/development_comparison.csv`, with details in `results_extension/metrics.json`. The extension function receives only development rows and returns before any test evaluation. The original `results/` files stay unchanged. The notebook also has a separate cell for this exercise.
+
+Look at each model's change in patient MAE. Adding demographics changes the question: the inputs now include age and sex as well as voice. Keep the original test results as the original experiment; do not repeatedly select changes using those nine patients. A new confirmatory experiment needs a test group reserved before new choices, preferably external data.
 
 ## Sources
 

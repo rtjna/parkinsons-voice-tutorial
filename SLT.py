@@ -117,6 +117,32 @@ def compare_on_development(X, y, groups, models):
     return pd.DataFrame(rows).sort_values("patient_mae").reset_index(drop=True)
 
 
+def run_development_extension(development_df, models, out):
+    """Compare voice alone with voice + demographics, using development data only."""
+    voice_X, y, groups = define_task(development_df)
+    expanded_X = development_df[FEATURES + ["age", "sex"]]
+    comparisons = []
+    for label, X in [("Voice only", voice_X), ("Voice + age + sex", expanded_X)]:
+        # The row order, patient groups and seeded folds are identical for both
+        # feature sets. This function never receives the reserved test rows.
+        cv = compare_on_development(X, y, groups, models)
+        cv.insert(0, "feature_set", label)
+        comparisons.append(cv)
+    comparison = pd.concat(comparisons, ignore_index=True)
+    results = {
+        "seed": SEED,
+        "development_patients": sorted(groups.unique().tolist()),
+        "test_evaluated": False,
+        "comparison": comparison.to_dict(orient="records"),
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    comparison.to_csv(out / "development_comparison.csv", index=False)
+    (out / "metrics.json").write_text(json.dumps(results, indent=2) + "\n")
+    print(comparison[["feature_set", "model", "patient_mae"]].round(2).to_string(index=False))
+    print(f"\nDevelopment comparison saved to {out}/. Test patients were not evaluated.")
+    return results
+
+
 def bootstrap_patient_mean(errors):
     """Resample patients, not correlated recordings, for a rough 95% interval."""
     values = np.asarray(errors)
@@ -162,9 +188,15 @@ def save_figures(results, cv, patient_mae, predictions, out):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--development-only", action="store_true",
+        help="Compare voice alone with voice + age/sex on development patients only.",
+    )
     args = parser.parse_args(argv)
-    out = args.output_dir
+    out = args.output_dir or Path("results_extension" if args.development_only else "results")
+    if args.development_only and out.resolve() == Path("results").resolve():
+        parser.error("Use a separate output folder for the extension, not results/.")
     out.mkdir(parents=True, exist_ok=True)
     df, checksum = load_data(args.data_dir)
     X, y, groups = define_task(df)
@@ -175,6 +207,8 @@ def main(argv=None):
     dev, test = next(split.split(X, y, groups))
     assert set(groups.iloc[dev]).isdisjoint(groups.iloc[test])
     models = candidate_models()
+    if args.development_only:
+        return run_development_extension(df.iloc[dev].copy(), models, out)
     cv = compare_on_development(X.iloc[dev], y.iloc[dev], groups.iloc[dev], models)
     selected_name = cv.loc[0, "model"]
     selected = clone(models[selected_name]).fit(X.iloc[dev], y.iloc[dev])
