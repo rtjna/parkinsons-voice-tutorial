@@ -15,7 +15,7 @@ import urllib.request
 import zipfile
 
 import matplotlib
-matplotlib.use("Agg")  # Save figures without requiring a desktop display.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -38,7 +38,6 @@ FEATURES = [
 ]
 
 
-# 1. Load and inspect. A local copy is included; download only if it is absent.
 def load_data(data_dir):
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / "parkinsons_updrs.data"
@@ -49,7 +48,6 @@ def load_data(data_dir):
             for name in ["parkinsons_updrs.data", "parkinsons_updrs.names"]:
                 (data_dir / name).write_bytes(archive.read(name))
     df = pd.read_csv(path)
-    # Stop rather than silently clean a different or damaged dataset.
     assert df.shape == (5875, 22), "Unexpected dataset shape."
     assert df["subject#"].nunique() == 42, "Unexpected patient count."
     assert not df.isna().any().any(), "Missing values need an explicit policy."
@@ -58,10 +56,6 @@ def load_data(data_dir):
     return df, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-# 2. Define the question before fitting any models.
-# Use voice features only. ID is for grouping, not prediction. Leave out age,
-# sex and time to keep the question focused. total_UPDRS is another clinical
-# score and would give away information about motor_UPDRS.
 def define_task(df):
     return df[FEATURES], df["motor_UPDRS"], df["subject#"].astype(int)
 
@@ -84,23 +78,16 @@ def summarize(y, prediction, groups):
     }
 
 
-# 3. Compare a small, pre-specified set of models. We are choosing a model,
-# not searching dozens of settings until the test result looks impressive.
 def candidate_models():
     return {
         "Mean baseline": DummyRegressor(strategy="mean"),
-        # A pipeline fits scaling on the training fold only. Correlated voice
-        # measures motivate ridge's regularization; alpha=10 is fixed in advance.
         "Ridge": make_pipeline(StandardScaler(), Ridge(alpha=10.0)),
-        # Leaf size limits memorization. The forest needs no feature scaling.
         "Random forest": RandomForestRegressor(
             n_estimators=200, min_samples_leaf=5, random_state=SEED, n_jobs=1,
         ),
     }
 
 
-# 4. Select using development patients only. Each out-of-fold prediction is
-# made by a model that has never seen any recordings from that patient.
 def compare_on_development(X, y, groups, models):
     folds = GroupKFold(n_splits=5, shuffle=True, random_state=SEED)
     rows = []
@@ -112,8 +99,6 @@ def compare_on_development(X, y, groups, models):
             prediction[valid] = fitted.predict(X.iloc[valid])
         assert np.isfinite(prediction).all()
         rows.append({"model": name, **summarize(y, prediction, groups)})
-    # Mean of the 33 patient-specific errors is the selection metric. These
-    # development results guide selection; they are not the final test estimate.
     return pd.DataFrame(rows).sort_values("patient_mae").reset_index(drop=True)
 
 
@@ -123,8 +108,6 @@ def run_development_extension(development_df, models, out):
     expanded_X = development_df[FEATURES + ["age", "sex"]]
     comparisons = []
     for label, X in [("Voice only", voice_X), ("Voice + age + sex", expanded_X)]:
-        # The row order, patient groups and seeded folds are identical for both
-        # feature sets. This function never receives the reserved test rows.
         cv = compare_on_development(X, y, groups, models)
         cv.insert(0, "feature_set", label)
         comparisons.append(cv)
@@ -201,8 +184,6 @@ def main(argv=None):
     df, checksum = load_data(args.data_dir)
     X, y, groups = define_task(df)
 
-    # GroupShuffleSplit's 20% refers to patients, not recordings: 9 test,
-    # 33 development patients. Never choose the seed based on test performance.
     split = GroupShuffleSplit(n_splits=1, test_size=.20, random_state=SEED)
     dev, test = next(split.split(X, y, groups))
     assert set(groups.iloc[dev]).isdisjoint(groups.iloc[test])
@@ -213,8 +194,6 @@ def main(argv=None):
     selected_name = cv.loc[0, "model"]
     selected = clone(models[selected_name]).fit(X.iloc[dev], y.iloc[dev])
 
-    # 5. Final evaluation happens after selection. Compare against the same
-    # training-mean baseline on the same untouched test patients.
     prediction = selected.predict(X.iloc[test])
     baseline = clone(models["Mean baseline"]).fit(X.iloc[dev], y.iloc[dev])
     baseline_prediction = baseline.predict(X.iloc[test])
@@ -228,12 +207,6 @@ def main(argv=None):
         "baseline_prediction": baseline_prediction,
     })
 
-    # 6. Additional diagnostic: contrast the fixed random forest under the
-    # two split methods. This does not alter the selected baseline or tune
-    # any forest settings. Patient overlap makes the row split an easier,
-    # different question: more recordings from already represented patients.
-    # The two test sets differ, so their error gap is not a controlled causal
-    # estimate of leakage. Do not use this demonstration for model selection.
     row_train, row_test = train_test_split(np.arange(len(df)), test_size=.20,
                                           random_state=SEED)
     forest = clone(models["Random forest"]).fit(X.iloc[dev], y.iloc[dev])
@@ -268,7 +241,6 @@ def main(argv=None):
     cv.to_csv(out / "development_comparison.csv", index=False)
     predictions.to_csv(out / "test_predictions.csv", index=False)
     errors.rename("mae").to_csv(out / "patient_errors.csv")
-    # Save membership so peers can confirm that subjects never cross splits.
     pd.DataFrame({"row": np.arange(len(df)), "patient": groups,
                   "split": np.where(np.isin(np.arange(len(df)), test), "test", "development")
                   }).to_csv(out / "split_membership.csv", index=False)
