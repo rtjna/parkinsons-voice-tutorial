@@ -157,6 +157,18 @@ def save_figures(results, cv, patient_mae, predictions, out):
     fig.tight_layout(); fig.savefig(out / "patient_errors.png", dpi=180)
     plt.close(fig)
 
+    fig, ax = plt.subplots(figsize=(7, 4))
+    values = [results["fixed_forest_test"]["patient_mae"],
+              results["random_recording_split"]["patient_mae"]]
+    bars = ax.barh(["Unseen patients", "Random recordings"], values,
+                   color=["#286777", "#c15b3d"])
+    ax.invert_yaxis()
+    ax.bar_label(bars, fmt="%.2f", padding=4)
+    ax.set(xlim=(0, 8), xlabel="Mean patient MAE (motor UPDRS points)",
+           title="Fixed random forest: different test sets")
+    fig.tight_layout(); fig.savefig(out / "split_comparison.png", dpi=180)
+    plt.close(fig)
+
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.scatter(predictions["actual"], predictions["predicted"], s=12, alpha=.25,
                color="#286777", edgecolors="none")
