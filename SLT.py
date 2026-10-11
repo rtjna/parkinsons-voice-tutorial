@@ -1,5 +1,6 @@
 """Can a voice model work for a new patient?
 
+GPT 6.1 used for code assistance
 Run: python SLT.py
 Data: UCI Parkinsons Telemonitoring, DOI 10.24432/C5ZS3N, CC BY 4.0.
 The target is interpolated motor UPDRS, not a diagnosis or a future score.
