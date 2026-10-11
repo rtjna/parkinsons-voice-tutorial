@@ -17,7 +17,7 @@ python SLT.py
 
 On Windows, activate with `.venv\Scripts\activate`. The code runs on a CPU. The public data table is included, so the analysis runs offline after dependencies are installed. If the data file is absent, the script downloads it from UCI.
 
-Or open [the notebook in Colab](https://colab.research.google.com/github/rtjna/parkinsons-voice-tutorial/blob/main/SLT.ipynb) and select **Run all**. It contains the same analysis, with explanations between cells. Colab downloads the public data if it is not already present.
+For Colab, download `SLT.ipynb` from this repository. Open [Google Colab](https://colab.research.google.com), choose **File > Upload notebook**, and select **Run all**. It contains the same analysis, with explanations between cells. Colab downloads the public data if it is not already present.
 
 ## What the analysis does
 
