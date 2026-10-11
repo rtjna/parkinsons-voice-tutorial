@@ -32,6 +32,7 @@ from sklearn.preprocessing import StandardScaler
 
 SEED = 42
 DATA_URL = "https://archive.ics.uci.edu/static/public/189/parkinsons+telemonitoring.zip"
+# Use voice measurements only; clinical scores would leak outcome information.
 FEATURES = [
     "Jitter(%)", "Jitter(Abs)", "Jitter:RAP", "Jitter:PPQ5", "Jitter:DDP",
     "Shimmer", "Shimmer(dB)", "Shimmer:APQ3", "Shimmer:APQ5",
@@ -40,6 +41,7 @@ FEATURES = [
 
 
 def load_data(data_dir):
+    """Read the included UCI data, downloading it only if the file is missing."""
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / "parkinsons_updrs.data"
     if not path.exists():
@@ -49,6 +51,7 @@ def load_data(data_dir):
             for name in ["parkinsons_updrs.data", "parkinsons_updrs.names"]:
                 (data_dir / name).write_bytes(archive.read(name))
     df = pd.read_csv(path)
+    # Stop if the data differ from the expected cohort or need cleaning.
     assert df.shape == (5875, 22), "Unexpected dataset shape."
     assert df["subject#"].nunique() == 42, "Unexpected patient count."
     assert not df.isna().any().any(), "Missing values need an explicit policy."
@@ -58,6 +61,7 @@ def load_data(data_dir):
 
 
 def define_task(df):
+    # Patient IDs define groups, but never enter the model as predictors.
     return df[FEATURES], df["motor_UPDRS"], df["subject#"].astype(int)
 
 
@@ -67,10 +71,12 @@ def patient_errors(y, prediction, groups):
         "patient": np.asarray(groups),
         "absolute_error": np.abs(np.asarray(y) - np.asarray(prediction)),
     })
+    # Average within patients before averaging across the cohort.
     return errors.groupby("patient")["absolute_error"].mean()
 
 
 def summarize(y, prediction, groups):
+    # Select models using patient_mae; the other metrics weight recordings.
     return {
         "patient_mae": float(patient_errors(y, prediction, groups).mean()),
         "recording_mae": float(mean_absolute_error(y, prediction)),
@@ -80,6 +86,8 @@ def summarize(y, prediction, groups):
 
 
 def candidate_models():
+    # Fix these settings before seeing test results. The pipeline fits scaling
+    # separately within each training fold; the forest needs no scaling.
     return {
         "Mean baseline": DummyRegressor(strategy="mean"),
         "Ridge": make_pipeline(StandardScaler(), Ridge(alpha=10.0)),
@@ -90,14 +98,17 @@ def candidate_models():
 
 
 def compare_on_development(X, y, groups, models):
+    """Compare models using five folds that keep each patient's rows together."""
     folds = GroupKFold(n_splits=5, shuffle=True, random_state=SEED)
     rows = []
     for name, model in models.items():
         prediction = np.full(len(y), np.nan)
         for train, valid in folds.split(X, y, groups):
             assert set(groups.iloc[train]).isdisjoint(groups.iloc[valid])
+            # A fresh estimator prevents fitted state from carrying between folds.
             fitted = clone(model).fit(X.iloc[train], y.iloc[train])
             prediction[valid] = fitted.predict(X.iloc[valid])
+        # Each development row gets a prediction from a model that never saw it.
         assert np.isfinite(prediction).all()
         rows.append({"model": name, **summarize(y, prediction, groups)})
     return pd.DataFrame(rows).sort_values("patient_mae").reset_index(drop=True)
@@ -107,6 +118,7 @@ def run_development_extension(development_df, models, out):
     """Compare voice alone with voice + demographics, using development data only."""
     voice_X, y, groups = define_task(development_df)
     expanded_X = development_df[FEATURES + ["age", "sex"]]
+    # Reuse the same patients and folds so only the feature set changes.
     comparisons = []
     for label, X in [("Voice only", voice_X), ("Voice + age + sex", expanded_X)]:
         cv = compare_on_development(X, y, groups, models)
@@ -136,6 +148,7 @@ def bootstrap_patient_mean(errors):
 
 
 def save_figures(results, cv, patient_mae, predictions, out):
+    """Save the result plots used in the PowerPoint, plus a prediction scatterplot."""
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11,
                          "axes.spines.top": False, "axes.spines.right": False})
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -197,16 +210,20 @@ def main(argv=None):
     df, checksum = load_data(args.data_dir)
     X, y, groups = define_task(df)
 
+    # Reserve 20% of patients, not recordings: 33 for development and 9 for test.
     split = GroupShuffleSplit(n_splits=1, test_size=.20, random_state=SEED)
     dev, test = next(split.split(X, y, groups))
     assert set(groups.iloc[dev]).isdisjoint(groups.iloc[test])
     models = candidate_models()
     if args.development_only:
+        # Exit before test evaluation so the extension cannot reuse test feedback.
         return run_development_extension(df.iloc[dev].copy(), models, out)
     cv = compare_on_development(X.iloc[dev], y.iloc[dev], groups.iloc[dev], models)
+    # Choose the lowest development patient MAE, then refit on development data.
     selected_name = cv.loc[0, "model"]
     selected = clone(models[selected_name]).fit(X.iloc[dev], y.iloc[dev])
 
+    # Evaluate the reserved patients only after model selection is complete.
     prediction = selected.predict(X.iloc[test])
     baseline = clone(models["Mean baseline"]).fit(X.iloc[dev], y.iloc[dev])
     baseline_prediction = baseline.predict(X.iloc[test])
@@ -220,6 +237,8 @@ def main(argv=None):
         "baseline_prediction": baseline_prediction,
     })
 
+    # Diagnostic only: compare the same forest settings with a recording split.
+    # Its different test set and patient overlap make this a different question.
     row_train, row_test = train_test_split(np.arange(len(df)), test_size=.20,
                                           random_state=SEED)
     forest = clone(models["Random forest"]).fit(X.iloc[dev], y.iloc[dev])
@@ -230,6 +249,7 @@ def main(argv=None):
                             groups.iloc[row_test])
     overlap = sorted(set(groups.iloc[row_train]) & set(groups.iloc[row_test]))
 
+    # Save versions, the data checksum and split membership for replication.
     results = {
         "question": "Can voice measurements estimate motor UPDRS for an unseen patient?",
         "seed": SEED, "data_sha256": checksum,
@@ -258,7 +278,7 @@ def main(argv=None):
                   "split": np.where(np.isin(np.arange(len(df)), test), "test", "development")
                   }).to_csv(out / "split_membership.csv", index=False)
     save_figures(results, cv, errors, predictions, out)
-    print(cv[["model", "patient_mae"]].to_string(index=False))
+    print(cv[["model", "patient_mae"]].round(2).to_string(index=False))
     print(f"\nSelected: {selected_name}")
     print(f"Unseen-patient MAE: {test_metrics['patient_mae']:.2f} points")
     print(f"Same-test baseline MAE: {baseline_metrics['patient_mae']:.2f} points")
